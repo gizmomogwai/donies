@@ -1,0 +1,12 @@
+{
+    "name": "donie2",
+    "description": "CLI tool to manage Creative Tonies via the Tonie Cloud API",
+    "authors": ["christian.koestlin"],
+    "license": "MIT",
+    "dependencies": {
+        "argparse": "~>2.0.2",
+        "requests": "~>2.2.0"
+    },
+    "targetType": "executable",
+    "targetPath": "bin"
+}
