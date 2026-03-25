@@ -1,9 +1,11 @@
 module api;
 
-import std.json;
+import std.json : JSONValue, JSONType, parseJSON;
 import std.string : format;
-import std.stdio : writeln, stderr;
-import requests;
+import std.stdio : File;
+import std.path : baseName;
+import requests : Request, Response, MultipartForm, formData;
+import requests.base : FormDataFile, FiniteReadable;
 
 private immutable string LOGIN_URL =
     "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect/token";
@@ -205,9 +207,6 @@ FileUploadRequest requestUploadUrl(string token)
 /// onProgress is called with the byte count of each chunk as it is sent.
 void uploadToS3(FileUploadRequest fur, string filePath, void delegate(size_t) onProgress = null)
 {
-    import std.stdio : File;
-    import std.path : baseName;
-    import requests.base : FormDataFile, FiniteReadable;
 
     class ProgressReadable : FiniteReadable
     {

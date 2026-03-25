@@ -7,7 +7,8 @@
         "argparse": "~>2.0.2",
         "requests": "~>2.2.0",
         "colored": "~>0.0.33",
-        "progressbar": {"path": "../10-progressbar4d"}
+        "progressbar": {"path": "../10-progressbar4d"},
+        "asciitable": "~>0.0.17"
     },
     "targetType": "executable",
     "targetPath": "bin"

@@ -1,16 +1,23 @@
 module app;
 
-import argparse;
-import colored;
+import argparse : Command, NamedArgument, PositionalArgument, SubCommand, CLI, Description, Required, matchCmd;
+import unit : TIME, onlyRelevant, mostSignificant;
+import asciitable : AsciiTable;
+import std.algorithm : map;
+import std.array : join;
+import colored : cyan, bold, darkGray, lightGreen, lightRed;
+import core.atomic : atomicLoad, atomicStore;
+import core.thread : Thread, msecs;
+import progressbar : Progressbar, multiTextUi;
 import std.conv : to;
+import std.file : getSize;
+import std.parallelism : parallel;
+import std.path : baseName, stripExtension;
 import std.stdio : writeln, writefln, stderr;
 import std.string : format;
-import std.path : baseName, stripExtension;
-import api;
-
-// ---------------------------------------------------------------------------
-// Subcommand structs
-// ---------------------------------------------------------------------------
+import api : Household, CreativeTonie, NewChapter,
+    authenticate, getHouseholds, getCreativeTonies, clearChapters,
+    requestUploadUrl, uploadToS3, setChapters;
 
 @(Command("list").Description("List all households and their Creative Tonies"))
 struct List {}
@@ -38,12 +45,8 @@ struct Upload
     string[] files;
 }
 
-// ---------------------------------------------------------------------------
-// Top-level program
-// ---------------------------------------------------------------------------
-
-@(Command("donie2").Description("Manage Creative Tonies via the Tonie Cloud API"))
-struct Program
+@(Command("donie").Description("Manage Creative Tonies via the Tonie Cloud API"))
+struct Arguments
 {
     @(NamedArgument(["email", "e"]).Description("Tonie account email").Required)
     string email;
@@ -54,46 +57,38 @@ struct Program
     SubCommand!(List, Clear, Upload) cmd;
 }
 
-// ---------------------------------------------------------------------------
-// Output helpers
-// ---------------------------------------------------------------------------
-
-/// Bold cyan heading with a "==>" prefix.
 private void heading(string msg)
 {
     writeln(("==> " ~ msg).cyan.bold.to!string);
 }
 
-/// Indented detail line.
 private void detail(string msg)
 {
     writeln("    " ~ msg);
 }
 
-/// Green success line with a checkmark.
 private void success(string msg)
 {
-    writeln(("    \u2713 " ~ msg).lightGreen.to!string);
+    writeln(("    ✓ " ~ msg).lightGreen.to!string);
 }
 
 /// Red error line with a cross.
 private void fail(string msg)
 {
-    stderr.writeln(("    \u2717 " ~ msg).lightRed.bold.to!string);
+    stderr.writeln(("    ✗ " ~ msg).lightRed.bold.to!string);
 }
-
-// ---------------------------------------------------------------------------
-// Lookup helpers
-// ---------------------------------------------------------------------------
 
 private Household resolveHousehold(Household[] households, string name)
 {
-    if (name.length == 0)
+    if (name is null) {
         return households[0];
+    }
 
-    foreach (h; households)
-        if (h.name == name)
+    foreach (h; households) {
+        if (h.name == name) {
             return h;
+        }
+    }
 
     throw new Exception(format!"Household '%s' not found. Available: %-(%s, %)"(
             name, households));
@@ -101,125 +96,140 @@ private Household resolveHousehold(Household[] households, string name)
 
 private CreativeTonie resolveTonie(CreativeTonie[] tonies, string name)
 {
-    foreach (t; tonies)
-        if (t.name == name)
+    foreach (t; tonies) {
+        if (t.name == name) {
             return t;
-
+        }
+    }
     throw new Exception(format!"Creative Tonie '%s' not found. Available: %-(%s, %)"(
             name, tonies));
 }
 
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
+private int runList(string token)
+{
+    heading("Fetching households ...");
+    auto households = getHouseholds(token);
 
-mixin CLI!Program.main!((prog) {
+    auto table = new AsciiTable(5)
+        .header
+            .add("Household")
+            .add("Tonie")
+            .add("ID")
+            .add("Chapters")
+            .add("Duration");
+
+    foreach (h; households)
+    {
+        auto tonies = getCreativeTonies(token, h.id);
+        foreach (t; tonies)
+        {
+            table.row
+                .add(h.name)
+                .add(t.name)
+                .add(t.id)
+                .add(t.chaptersPresent)
+                .add({
+                    auto parts = TIME.transform(cast(long)(t.secondsPresent * 1000))
+                                     .onlyRelevant
+                                     .mostSignificant(2)
+                                     .map!(p => format!"%d%s"(p.value, p.name))
+                                     .join(" ");
+                    return parts.length > 0 ? parts : "0s";
+                }());
+        }
+    }
+
+    table.format
+        .columnSeparator(true)
+        .headerSeparator(true)
+        .writeln;
+
+    return 0;
+}
+
+private int runClear(string token, Clear cmd)
+{
+    auto households = getHouseholds(token);
+    auto household  = resolveHousehold(households, cmd.household);
+    auto tonies     = getCreativeTonies(token, household.id);
+    auto tonie      = resolveTonie(tonies, cmd.tonie);
+
+    heading(format!"Clearing all chapters from '%s' ..."(tonie.name));
+    clearChapters(token, household.id, tonie.id);
+    success("All chapters cleared.");
+    return 0;
+}
+
+private int runUpload(string token, Upload cmd)
+{
+    if (cmd.files.length == 0)
+    {
+        fail("No files specified for upload.");
+        return 1;
+    }
+
+    auto households = getHouseholds(token);
+    auto household  = resolveHousehold(households, cmd.household);
+    auto tonies     = getCreativeTonies(token, household.id);
+    auto tonie      = resolveTonie(tonies, cmd.tonie);
+
+    heading(format!"Uploading %d file(s) in parallel ..."(cmd.files.length));
+
+    auto pbs = new Progressbar[cmd.files.length];
+    foreach (i, file; cmd.files)
+        pbs[i] = new Progressbar(getSize(file));
+
+    auto fmts = new string[cmd.files.length];
+    fmts[] = " %<25m [%=30P] %p";
+
+    auto mpb = multiTextUi(pbs, fmts);
+
+    foreach (i, file; cmd.files)
+        pbs[i].message(stripExtension(baseName(file)));
+
+    shared bool stopRender = false;
+    auto renderThread = new Thread({
+        while (!atomicLoad(stopRender))
+        {
+            mpb.render();
+            Thread.sleep(100.msecs);
+        }
+        mpb.render();
+    }).start();
+
+    auto results = new NewChapter[cmd.files.length];
+    foreach (i, file; parallel(cmd.files))
+    {
+        string title = stripExtension(baseName(file));
+        pbs[i].message("url - " ~ title);
+        auto uploadReq = requestUploadUrl(token);
+        pbs[i].message("s3  - " ~ title);
+        uploadToS3(uploadReq, file, (size_t n) { pbs[i].step(n); });
+        pbs[i].message(" ✓  - " ~ title);
+        results[i] = NewChapter(title, uploadReq.fileId);
+    }
+
+    atomicStore(stopRender, true);
+    renderThread.join();
+    mpb.finish();
+
+    heading(format!"Setting %d chapter(s) on '%s' ..."(results.length, tonie.name));
+    setChapters(token, household.id, tonie.id, results);
+    success(format!"%d chapter(s) committed to tonie."(results.length));
+    return 0;
+}
+
+mixin CLI!Arguments.main!((arguments) {
     try
     {
-        heading(format!"Authenticating as %s ..."(prog.email));
-        string token = authenticate(prog.email, prog.password);
+        heading(format!"Authenticating as %s ..."(arguments.email));
+        string token = authenticate(arguments.email, arguments.password);
         success("Authenticated.");
 
-        return prog.cmd.matchCmd!(
-            (List _)
-            {
-                heading("Fetching households ...");
-                auto households = getHouseholds(token);
-                foreach (h; households)
-                {
-                    writeln(("  Household: " ~ h.name).bold.to!string
-                            ~ ("  (" ~ h.id ~ ")").darkGray.to!string);
-                    auto tonies = getCreativeTonies(token, h.id);
-                    foreach (t; tonies)
-                    {
-                        detail(format!"%s  id: %s  chapters: %d  %.0fs used"(
-                            t.name.bold.to!string,
-                            t.id.darkGray.to!string,
-                            t.chaptersPresent,
-                            t.secondsPresent));
-                    }
-                }
-                return 0;
-            },
-            (Clear cmd)
-            {
-                auto households = getHouseholds(token);
-                auto household  = resolveHousehold(households, cmd.household);
-                auto tonies     = getCreativeTonies(token, household.id);
-                auto tonie      = resolveTonie(tonies, cmd.tonie);
-
-                heading(format!"Clearing all chapters from '%s' ..."(tonie.name));
-                clearChapters(token, household.id, tonie.id);
-                success("All chapters cleared.");
-                return 0;
-            },
-            (Upload cmd)
-            {
-                if (cmd.files.length == 0)
-                {
-                    fail("No files specified for upload.");
-                    return 1;
-                }
-
-                auto households = getHouseholds(token);
-                auto household  = resolveHousehold(households, cmd.household);
-                auto tonies     = getCreativeTonies(token, household.id);
-                auto tonie      = resolveTonie(tonies, cmd.tonie);
-
-                heading(format!"Uploading %d file(s) in parallel ..."(cmd.files.length));
-
-                import core.atomic : atomicLoad, atomicStore;
-                import core.thread : Thread, msecs;
-                import std.file : getSize;
-                import std.parallelism : parallel;
-                import progressbar : Progressbar, multiTextUi;
-
-                // One Progressbar per file, total = file size in bytes for real byte progress
-                auto pbs = new Progressbar[cmd.files.length];
-                foreach (i, file; cmd.files)
-                    pbs[i] = new Progressbar(getSize(file));
-
-                auto fmts = new string[cmd.files.length];
-                fmts[] = " %<25m [%=30P] %p";
-
-                auto mpb = multiTextUi(pbs, fmts);
-
-                // Seed each bar with the filename as its initial message
-                foreach (i, file; cmd.files)
-                    pbs[i].message(stripExtension(baseName(file)));
-
-                // Background thread redraws all bars at 100 ms intervals
-                shared bool stopRender = false;
-                auto renderThread = new Thread({
-                    while (!atomicLoad(stopRender))
-                    {
-                        mpb.render();
-                        Thread.sleep(100.msecs);
-                    }
-                    mpb.render();
-                }).start();
-
-                auto results = new NewChapter[cmd.files.length];
-                foreach (i, file; parallel(cmd.files))
-                {
-                    string title = stripExtension(baseName(file));
-                    pbs[i].message("[url] " ~ title);
-                    auto uploadReq = requestUploadUrl(token);
-                    pbs[i].message("[s3] " ~ title);
-                    uploadToS3(uploadReq, file, (size_t n) { pbs[i].step(n); });
-                    pbs[i].message("\u2713" ~ title);
-                    results[i] = NewChapter(title, uploadReq.fileId);
-                }
-
-                atomicStore(stopRender, true);
-                renderThread.join();
-                mpb.finish();
-
-                heading(format!"Setting %d chapter(s) on '%s' ..."(results.length, tonie.name));
-                setChapters(token, household.id, tonie.id, results);
-                success(format!"%d chapter(s) committed to tonie."(results.length));
-                return 0;
-            }
+        return arguments.cmd.matchCmd!(
+            (List _)       => runList(token),
+            (Clear cmd)    => runClear(token, cmd),
+            (Upload cmd)   => runUpload(token, cmd)
         );
     }
     catch (Exception e)
