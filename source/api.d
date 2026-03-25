@@ -202,10 +202,28 @@ FileUploadRequest requestUploadUrl(string token)
 }
 
 /// Step 2: Upload a local audio file to the presigned S3 URL.
-void uploadToS3(FileUploadRequest fur, string filePath)
+/// onProgress is called with the byte count of each chunk as it is sent.
+void uploadToS3(FileUploadRequest fur, string filePath, void delegate(size_t) onProgress = null)
 {
-    import std.file : read;
+    import std.stdio : File;
     import std.path : baseName;
+    import requests.base : FormDataFile, FiniteReadable;
+
+    class ProgressReadable : FiniteReadable
+    {
+        private FiniteReadable inner;
+        this(FiniteReadable inner) { this.inner = inner; }
+
+        override ulong getSize() { return inner.getSize(); }
+
+        override ubyte[] read()
+        {
+            auto chunk = inner.read();
+            if (chunk.length > 0 && onProgress !is null)
+                onProgress(chunk.length);
+            return chunk;
+        }
+    }
 
     auto req = Request();
 
@@ -214,12 +232,15 @@ void uploadToS3(FileUploadRequest fur, string filePath)
     foreach (key, val; fur.s3.fields)
         form.add(formData(key, val));
 
-    // The file field must come last per AWS requirements
-    auto fileData = cast(ubyte[]) read(filePath);
-    form.add(formData("file", fileData, [
+    // Stream the file in chunks without loading it fully into RAM
+    auto readable = (onProgress !is null)
+        ? cast(FiniteReadable) new ProgressReadable(new FormDataFile(File(filePath, "rb")))
+        : new FormDataFile(File(filePath, "rb"));
+
+    form.add("file", readable, [
         "filename": baseName(filePath),
         "Content-Type": "application/octet-stream"
-    ]));
+    ]);
 
     auto resp = req.post(fur.s3.url, form);
 

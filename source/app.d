@@ -168,17 +168,52 @@ mixin CLI!Program.main!((prog) {
 
                 heading(format!"Uploading %d file(s) in parallel ..."(cmd.files.length));
 
+                import core.atomic : atomicLoad, atomicStore;
+                import core.thread : Thread, msecs;
+                import std.file : getSize;
                 import std.parallelism : parallel;
+                import progressbar : Progressbar, multiTextUi;
+
+                // One Progressbar per file, total = file size in bytes for real byte progress
+                auto pbs = new Progressbar[cmd.files.length];
+                foreach (i, file; cmd.files)
+                    pbs[i] = new Progressbar(getSize(file));
+
+                auto fmts = new string[cmd.files.length];
+                fmts[] = " %<25m [%=30P] %p";
+
+                auto mpb = multiTextUi(pbs, fmts);
+
+                // Seed each bar with the filename as its initial message
+                foreach (i, file; cmd.files)
+                    pbs[i].message(stripExtension(baseName(file)));
+
+                // Background thread redraws all bars at 100 ms intervals
+                shared bool stopRender = false;
+                auto renderThread = new Thread({
+                    while (!atomicLoad(stopRender))
+                    {
+                        mpb.render();
+                        Thread.sleep(100.msecs);
+                    }
+                    mpb.render();
+                }).start();
+
                 auto results = new NewChapter[cmd.files.length];
                 foreach (i, file; parallel(cmd.files))
                 {
                     string title = stripExtension(baseName(file));
-                    detail(format!"Uploading '%s' ..."(title));
+                    pbs[i].message("[url] " ~ title);
                     auto uploadReq = requestUploadUrl(token);
-                    uploadToS3(uploadReq, file);
+                    pbs[i].message("[s3] " ~ title);
+                    uploadToS3(uploadReq, file, (size_t n) { pbs[i].step(n); });
+                    pbs[i].message("\u2713" ~ title);
                     results[i] = NewChapter(title, uploadReq.fileId);
-                    success(format!"'%s' uploaded."(title));
                 }
+
+                atomicStore(stopRender, true);
+                renderThread.join();
+                mpb.finish();
 
                 heading(format!"Setting %d chapter(s) on '%s' ..."(results.length, tonie.name));
                 setChapters(token, household.id, tonie.id, results);

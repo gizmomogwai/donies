@@ -2,10 +2,13 @@
 	"fileVersion": 1,
 	"versions": {
 		"argparse": "2.0.2",
+		"asciitable": "0.0.17",
 		"automem": "0.6.11",
 		"cachetools": "0.4.2",
 		"colored": "0.0.34",
+		"dime": "0.0.9+commit.2.g018f35a",
 		"profiled": "0.0.2",
+		"progressbar": {"path":"../10-progressbar4d"},
 		"requests": "2.2.0",
 		"test_allocator": "0.3.4",
 		"unit-threaded": "2.2.3+commit.1.g1ebdbc9"

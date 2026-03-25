@@ -6,7 +6,8 @@
     "dependencies": {
         "argparse": "~>2.0.2",
         "requests": "~>2.2.0",
-        "colored": "~>0.0.33"
+        "colored": "~>0.0.33",
+        "progressbar": {"path": "../10-progressbar4d"}
     },
     "targetType": "executable",
     "targetPath": "bin"
