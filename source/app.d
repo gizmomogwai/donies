@@ -1,6 +1,8 @@
 module app;
 
 import argparse;
+import colored;
+import std.conv : to;
 import std.stdio : writeln, writefln, stderr;
 import std.string : format;
 import std.path : baseName, stripExtension;
@@ -53,7 +55,35 @@ struct Program
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Output helpers
+// ---------------------------------------------------------------------------
+
+/// Bold cyan heading with a "==>" prefix.
+private void heading(string msg)
+{
+    writeln(("==> " ~ msg).cyan.bold.to!string);
+}
+
+/// Indented detail line.
+private void detail(string msg)
+{
+    writeln("    " ~ msg);
+}
+
+/// Green success line with a checkmark.
+private void success(string msg)
+{
+    writeln(("    \u2713 " ~ msg).lightGreen.to!string);
+}
+
+/// Red error line with a cross.
+private void fail(string msg)
+{
+    stderr.writeln(("    \u2717 " ~ msg).lightRed.bold.to!string);
+}
+
+// ---------------------------------------------------------------------------
+// Lookup helpers
 // ---------------------------------------------------------------------------
 
 private Household resolveHousehold(Household[] households, string name)
@@ -86,20 +116,27 @@ private CreativeTonie resolveTonie(CreativeTonie[] tonies, string name)
 mixin CLI!Program.main!((prog) {
     try
     {
+        heading(format!"Authenticating as %s ..."(prog.email));
         string token = authenticate(prog.email, prog.password);
+        success("Authenticated.");
 
         return prog.cmd.matchCmd!(
             (List _)
             {
+                heading("Fetching households ...");
                 auto households = getHouseholds(token);
                 foreach (h; households)
                 {
-                    writefln!"Household: %s (id: %s)"(h.name, h.id);
+                    writeln(("  Household: " ~ h.name).bold.to!string
+                            ~ ("  (" ~ h.id ~ ")").darkGray.to!string);
                     auto tonies = getCreativeTonies(token, h.id);
                     foreach (t; tonies)
                     {
-                        writefln!"  Tonie: %s (id: %s, chapters: %d, %.0fs used)"(
-                            t.name, t.id, t.chaptersPresent, t.secondsPresent);
+                        detail(format!"%s  id: %s  chapters: %d  %.0fs used"(
+                            t.name.bold.to!string,
+                            t.id.darkGray.to!string,
+                            t.chaptersPresent,
+                            t.secondsPresent));
                     }
                 }
                 return 0;
@@ -111,16 +148,16 @@ mixin CLI!Program.main!((prog) {
                 auto tonies     = getCreativeTonies(token, household.id);
                 auto tonie      = resolveTonie(tonies, cmd.tonie);
 
-                writefln!"Clearing all chapters from '%s' ..."(tonie.name);
+                heading(format!"Clearing all chapters from '%s' ..."(tonie.name));
                 clearChapters(token, household.id, tonie.id);
-                writeln("Done.");
+                success("All chapters cleared.");
                 return 0;
             },
             (Upload cmd)
             {
                 if (cmd.files.length == 0)
                 {
-                    stderr.writeln("Error: no files specified for upload.");
+                    fail("No files specified for upload.");
                     return 1;
                 }
 
@@ -129,25 +166,30 @@ mixin CLI!Program.main!((prog) {
                 auto tonies     = getCreativeTonies(token, household.id);
                 auto tonie      = resolveTonie(tonies, cmd.tonie);
 
-                foreach (file; cmd.files)
+                heading(format!"Uploading %d file(s) in parallel ..."(cmd.files.length));
+
+                import std.parallelism : parallel;
+                auto results = new NewChapter[cmd.files.length];
+                foreach (i, file; parallel(cmd.files))
                 {
                     string title = stripExtension(baseName(file));
-                    writefln!"Uploading '%s' as chapter '%s' ..."(file, title);
-
+                    detail(format!"Uploading '%s' ..."(title));
                     auto uploadReq = requestUploadUrl(token);
                     uploadToS3(uploadReq, file);
-                    addChapter(token, household.id, tonie.id, title, uploadReq.fileId);
-
-                    writefln!"  ✓ '%s' uploaded."(title);
+                    results[i] = NewChapter(title, uploadReq.fileId);
+                    success(format!"'%s' uploaded."(title));
                 }
-                writeln("All files uploaded.");
+
+                heading(format!"Setting %d chapter(s) on '%s' ..."(results.length, tonie.name));
+                setChapters(token, household.id, tonie.id, results);
+                success(format!"%d chapter(s) committed to tonie."(results.length));
                 return 0;
             }
         );
     }
     catch (Exception e)
     {
-        stderr.writefln!"Error: %s"(e.msg);
+        fail(e.msg);
         return 1;
     }
 });

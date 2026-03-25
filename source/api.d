@@ -232,8 +232,16 @@ void uploadToS3(FileUploadRequest fur, string filePath)
     }
 }
 
-/// Step 3: Register the uploaded file as a new chapter on the Creative Tonie.
-void addChapter(string token, string householdId, string tonieId, string title, string fileId)
+/// A (title, fileId) pair describing a chapter to be set on a Creative Tonie.
+struct NewChapter
+{
+    string title;
+    string fileId;
+}
+
+/// Set the complete chapters list on a Creative Tonie in one PATCH request.
+/// Replaces whatever was there before; pass an empty array to clear.
+void setChapters(string token, string householdId, string tonieId, NewChapter[] chapters)
 {
     auto req = Request();
     req.addHeaders([
@@ -241,9 +249,13 @@ void addChapter(string token, string householdId, string tonieId, string title, 
         "Content-Type": "application/json"
     ]);
 
-    auto body_ = JSONValue(["title": JSONValue(title), "file": JSONValue(fileId)]);
-    auto resp = req.post(
-            API_BASE ~ "/households/" ~ householdId ~ "/creativetonies/" ~ tonieId ~ "/chapters",
+    JSONValue[] chapterJson;
+    foreach (ch; chapters)
+        chapterJson ~= JSONValue(["title": JSONValue(ch.title), "file": JSONValue(ch.fileId)]);
+
+    auto body_ = JSONValue(["chapters": JSONValue(chapterJson)]);
+    auto resp = req.patch(
+            API_BASE ~ "/households/" ~ householdId ~ "/creativetonies/" ~ tonieId,
             body_.toString(), "application/json");
-    parseResponse(resp, "addChapter");
+    parseResponse(resp, "setChapters");
 }
