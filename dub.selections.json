@@ -7,9 +7,14 @@
 		"cachetools": "0.4.2",
 		"colored": "0.0.34",
 		"dime": "0.0.9+commit.2.g018f35a",
+		"mir-algorithm": "3.22.4",
+		"mir-core": "1.7.4",
+		"mir-cpuid": "1.2.11",
+		"mir-ion": {"path":"../../external/mir-ion"},
 		"profiled": "0.0.2",
 		"progressbar": {"path":"../10-progressbar4d"},
 		"requests": "2.2.0",
+		"silly": "1.1.1",
 		"test_allocator": "0.3.4",
 		"unit-threaded": "2.2.3+commit.1.g1ebdbc9"
 	}

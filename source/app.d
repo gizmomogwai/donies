@@ -110,9 +110,9 @@ private CreativeTonie resolveTonie(CreativeTonie[] tonies, string name)
     throw new Exception(format!"Creative Tonie '%s' not found. Available: %-(%s, %)"(name, tonies));
 }
 
-private string formatSeconds(long seconds)
+private string formatSeconds(double seconds)
 {
-    auto parts = TIME.transform(seconds * 1000).onlyRelevant.mostSignificant(2)
+    auto parts = TIME.transform(cast(long)(seconds * 1000)).onlyRelevant.mostSignificant(2)
         .map!(p => format!"%d%s"(p.value, p.name)).join(" ");
     return parts.length > 0 ? parts : "0s";
 }
