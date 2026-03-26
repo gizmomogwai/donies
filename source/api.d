@@ -12,7 +12,7 @@ import std.uri : encodeComponent;
 
 private immutable string LOGIN_URL = "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect/token";
 private immutable string API_BASE = "https://api.tonie.cloud/v2";
-
+private immutable string TONIE_URL = "https://my.tonies.com/creative-tonies/%s/%s";
 @serdeIgnoreUnexpectedKeys
 struct Chapter
 {
@@ -64,10 +64,6 @@ struct NewChapter
     string fileId;
 }
 
-// ---------------------------------------------------------------------------
-// Private types for serialisation / deserialisation
-// ---------------------------------------------------------------------------
-
 @serdeIgnoreUnexpectedKeys
 private struct AuthResponse
 {
@@ -85,10 +81,6 @@ private struct ChapterPatch
     ChapterEntry[] chapters;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 private string checkResponse(Response response, string context)
 {
     if (response.code < 200 || response.code >= 300)
@@ -98,10 +90,6 @@ private string checkResponse(Response response, string context)
     }
     return cast(string) response.responseBody.data;
 }
-
-// ---------------------------------------------------------------------------
-// Auth
-// ---------------------------------------------------------------------------
 
 string authenticate(string username, string password)
 {
@@ -118,10 +106,6 @@ string authenticate(string username, string password)
     return (cast(string) resp.responseBody.data).deserializeJson!AuthResponse.access_token;
 }
 
-// ---------------------------------------------------------------------------
-// Households
-// ---------------------------------------------------------------------------
-
 /// Return all households for the authenticated user.
 Household[] getHouseholds(string token)
 {
@@ -131,10 +115,6 @@ Household[] getHouseholds(string token)
     auto resp = req.get(API_BASE ~ "/households");
     return checkResponse(resp, "getHouseholds").deserializeJson!(Household[]);
 }
-
-// ---------------------------------------------------------------------------
-// Creative Tonies
-// ---------------------------------------------------------------------------
 
 /// Return all Creative Tonies in the given household.
 CreativeTonie[] getCreativeTonies(string token, string householdId)
@@ -244,3 +224,6 @@ void setChapters(string token, string householdId, string tonieId, NewChapter[] 
     checkResponse(resp, "setChapters");
 }
 
+string urlFor(Household household, CreativeTonie tonie) {
+    return format(TONIE_URL, household.id, tonie.id);
+}

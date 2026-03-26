@@ -17,7 +17,7 @@ import std.stdio : stderr, writefln, writeln;
 import std.string : format;
 import unit : mostSignificant, onlyRelevant, TIME;
 import api : Household, CreativeTonie, NewChapter, authenticate, getHouseholds,
-    getCreativeTonies, clearChapters, requestUploadUrl, uploadToS3, setChapters;
+    getCreativeTonies, clearChapters, requestUploadUrl, uploadToS3, setChapters, urlFor;
 
 @(Command("list").Description("List all households and their Creative Tonies"))
 struct List
@@ -74,7 +74,6 @@ private void success(string msg)
     writeln(("    ✓ " ~ msg).lightGreen.to!string);
 }
 
-/// Red error line with a cross.
 private void fail(string msg)
 {
     stderr.writeln(("    ✗ " ~ msg).lightRed.bold.to!string);
@@ -123,27 +122,32 @@ private int runList(string token)
     auto households = getHouseholds(token);
 
     // dfmt off
-    auto table = new AsciiTable(6)
+    auto table = new AsciiTable(8)
         .header.add("Household")
+        .add("Household-ID")
             .add("Tonie")
-            .add("ID")
+            .add("Tonie-ID")
             .add("Chapters")
             .add("Duration")
-            .add("Remaining");
+            .add("Remaining")
+            .add("URL")
+        ;
     // dfmt on
 
-    foreach (h; households)
+    foreach (household; households)
     {
-        auto tonies = getCreativeTonies(token, h.id);
-        foreach (t; tonies)
+        auto tonies = getCreativeTonies(token, household.id);
+        foreach (tonie; tonies)
         {
             // dfmt off
-            table.row.add(h.name)
-                .add(t.name)
-                .add(t.id)
-                .add(format("%s / %s", t.chaptersPresent, t.chaptersRemaining + t.chaptersPresent))
-                .add(format("%s / %s", formatSeconds(t.secondsPresent), formatSeconds(t.secondsRemaining + t.secondsPresent)))
-                .add(formatSeconds(t.secondsRemaining))
+            table.row.add(household.name)
+                .add(household.id)
+                .add(tonie.name)
+                .add(tonie.id)
+                .add(format("%s / %s", tonie.chaptersPresent, tonie.chaptersRemaining + tonie.chaptersPresent))
+                .add(format("%s / %s", formatSeconds(tonie.secondsPresent), formatSeconds(tonie.secondsRemaining + tonie.secondsPresent)))
+                .add(formatSeconds(tonie.secondsRemaining))
+                .add(urlFor(household, tonie))
             ;
             // dfmt on
         }
@@ -187,7 +191,7 @@ private int runUpload(string token, Upload cmd)
         pbs[i] = new Progressbar(getSize(file));
 
     auto fmts = new string[cmd.files.length];
-    fmts[] = " %<25m [%=30P] %p";
+    fmts[] = " %<120m [%=10P] %p";
 
     auto mpb = multiTextUi(pbs, fmts);
 
@@ -222,7 +226,7 @@ private int runUpload(string token, Upload cmd)
 
     heading(format!"Setting %d chapter(s) on '%s' ..."(results.length, tonie.name));
     setChapters(token, household.id, tonie.id, results);
-    success(format!"%d chapter(s) committed to tonie."(results.length));
+    success(format!"%d chapter(s) committed to tonie. %s"(results.length, urlFor(household, tonie)));
     return 0;
 }
 
