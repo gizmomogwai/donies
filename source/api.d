@@ -1,19 +1,14 @@
 module api;
 
-import std.json : JSONValue, JSONType, parseJSON;
-import std.string : format;
-import std.stdio : File;
+import requests : formData, MultipartForm, Request, Response;
+import requests.base : FiniteReadable, FormDataFile;
+import std.json : JSONType, JSONValue, parseJSON;
 import std.path : baseName;
-import requests : Request, Response, MultipartForm, formData;
-import requests.base : FormDataFile, FiniteReadable;
+import std.stdio : File;
+import std.string : format;
 
-private immutable string LOGIN_URL =
-    "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect/token";
+private immutable string LOGIN_URL = "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect/token";
 private immutable string API_BASE = "https://api.tonie.cloud/v2";
-
-// ---------------------------------------------------------------------------
-// Data models
-// ---------------------------------------------------------------------------
 
 struct Chapter
 {
@@ -28,10 +23,10 @@ struct CreativeTonie
     string id;
     string householdId;
     string name;
-    double secondsRemaining;
-    double secondsPresent;
-    int chaptersRemaining;
-    int chaptersPresent;
+    long secondsRemaining;
+    long secondsPresent;
+    long chaptersRemaining;
+    long chaptersPresent;
     Chapter[] chapters;
 }
 
@@ -74,8 +69,7 @@ private Chapter parseChapter(JSONValue j)
     c.title = j["title"].str;
     c.file = j["file"].str;
     c.seconds = j["seconds"].type == JSONType.integer
-        ? cast(double) j["seconds"].integer
-        : j["seconds"].floating;
+        ? cast(double) j["seconds"].integer : j["seconds"].floating;
     return c;
 }
 
@@ -86,37 +80,29 @@ private CreativeTonie parseTonie(JSONValue j)
     t.householdId = j["householdId"].str;
     t.name = j["name"].str;
     t.secondsRemaining = j["secondsRemaining"].type == JSONType.integer
-        ? cast(double) j["secondsRemaining"].integer
-        : j["secondsRemaining"].floating;
+        ? j["secondsRemaining"].integer : cast(long) j["secondsRemaining"].floating;
     t.secondsPresent = j["secondsPresent"].type == JSONType.integer
-        ? cast(double) j["secondsPresent"].integer
-        : j["secondsPresent"].floating;
-    t.chaptersRemaining = cast(int) j["chaptersRemaining"].integer;
-    t.chaptersPresent = cast(int) j["chaptersPresent"].integer;
+        ? j["secondsPresent"].integer : cast(long) j["secondsPresent"].floating;
+    t.chaptersRemaining = j["chaptersRemaining"].integer;
+    t.chaptersPresent = j["chaptersPresent"].integer;
     foreach (ch; j["chapters"].array)
         t.chapters ~= parseChapter(ch);
     return t;
 }
 
-// ---------------------------------------------------------------------------
-// Authentication
-// ---------------------------------------------------------------------------
-
-/// Authenticate with email/password and return a Bearer access token.
 string authenticate(string email, string password)
 {
     auto req = Request();
     req.addHeaders(["Content-Type": "application/x-www-form-urlencoded"]);
 
-    string body_ = format!"grant_type=password&client_id=my-tonies&scope=openid&username=%s&password=%s"(
-            email, password);
+    string body_ = format!"grant_type=password&client_id=my-tonies&scope=openid&username=%s&password=%s"(email,
+            password);
 
     auto resp = req.post(LOGIN_URL, body_, "application/x-www-form-urlencoded");
 
     if (resp.code != 200)
     {
-        throw new Exception(
-                format!"Authentication failed (HTTP %d): %s"(resp.code,
+        throw new Exception(format!"Authentication failed (HTTP %d): %s"(resp.code,
                 cast(string) resp.responseBody.data));
     }
 
@@ -176,8 +162,7 @@ void clearChapters(string token, string householdId, string tonieId)
     ]);
 
     string body_ = `{"chapters":[]}`;
-    auto resp = req.patch(
-            API_BASE ~ "/households/" ~ householdId ~ "/creativetonies/" ~ tonieId,
+    auto resp = req.patch(API_BASE ~ "/households/" ~ householdId ~ "/creativetonies/" ~ tonieId,
             body_, "application/json");
     parseResponse(resp, "clearChapters");
 }
@@ -211,9 +196,15 @@ void uploadToS3(FileUploadRequest fur, string filePath, void delegate(size_t) on
     class ProgressReadable : FiniteReadable
     {
         private FiniteReadable inner;
-        this(FiniteReadable inner) { this.inner = inner; }
+        this(FiniteReadable inner)
+        {
+            this.inner = inner;
+        }
 
-        override ulong getSize() { return inner.getSize(); }
+        override ulong getSize()
+        {
+            return inner.getSize();
+        }
 
         override ubyte[] read()
         {
@@ -232,9 +223,8 @@ void uploadToS3(FileUploadRequest fur, string filePath, void delegate(size_t) on
         form.add(formData(key, val));
 
     // Stream the file in chunks without loading it fully into RAM
-    auto readable = (onProgress !is null)
-        ? cast(FiniteReadable) new ProgressReadable(new FormDataFile(File(filePath, "rb")))
-        : new FormDataFile(File(filePath, "rb"));
+    auto readable = (onProgress !is null) ? cast(FiniteReadable) new ProgressReadable(
+            new FormDataFile(File(filePath, "rb"))) : new FormDataFile(File(filePath, "rb"));
 
     form.add("file", readable, [
         "filename": baseName(filePath),
@@ -246,8 +236,7 @@ void uploadToS3(FileUploadRequest fur, string filePath, void delegate(size_t) on
     // S3 returns 204 No Content on success
     if (resp.code != 204 && resp.code != 200)
     {
-        throw new Exception(
-                format!"S3 upload failed (HTTP %d): %s"(resp.code,
+        throw new Exception(format!"S3 upload failed (HTTP %d): %s"(resp.code,
                 cast(string) resp.responseBody.data));
     }
 }
@@ -271,11 +260,13 @@ void setChapters(string token, string householdId, string tonieId, NewChapter[] 
 
     JSONValue[] chapterJson;
     foreach (ch; chapters)
-        chapterJson ~= JSONValue(["title": JSONValue(ch.title), "file": JSONValue(ch.fileId)]);
+        chapterJson ~= JSONValue([
+        "title": JSONValue(ch.title),
+        "file": JSONValue(ch.fileId)
+    ]);
 
     auto body_ = JSONValue(["chapters": JSONValue(chapterJson)]);
-    auto resp = req.patch(
-            API_BASE ~ "/households/" ~ householdId ~ "/creativetonies/" ~ tonieId,
+    auto resp = req.patch(API_BASE ~ "/households/" ~ householdId ~ "/creativetonies/" ~ tonieId,
             body_.toString(), "application/json");
     parseResponse(resp, "setChapters");
 }

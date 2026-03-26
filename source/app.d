@@ -1,26 +1,28 @@
 module app;
 
-import argparse : Command, NamedArgument, PositionalArgument, SubCommand, CLI, Description, Required, matchCmd;
-import unit : TIME, onlyRelevant, mostSignificant;
+import argparse : Command, NamedArgument, PositionalArgument, SubCommand, CLI,
+    Description, Required, matchCmd;
 import asciitable : AsciiTable;
+import colored : bold, cyan, darkGray, lightGreen, lightRed;
+import core.atomic : atomicLoad, atomicStore;
+import core.thread : msecs, Thread;
+import progressbar : multiTextUi, Progressbar;
 import std.algorithm : map;
 import std.array : join;
-import colored : cyan, bold, darkGray, lightGreen, lightRed;
-import core.atomic : atomicLoad, atomicStore;
-import core.thread : Thread, msecs;
-import progressbar : Progressbar, multiTextUi;
 import std.conv : to;
 import std.file : getSize;
 import std.parallelism : parallel;
 import std.path : baseName, stripExtension;
-import std.stdio : writeln, writefln, stderr;
+import std.stdio : stderr, writefln, writeln;
 import std.string : format;
-import api : Household, CreativeTonie, NewChapter,
-    authenticate, getHouseholds, getCreativeTonies, clearChapters,
-    requestUploadUrl, uploadToS3, setChapters;
+import unit : mostSignificant, onlyRelevant, TIME;
+import api : Household, CreativeTonie, NewChapter, authenticate, getHouseholds,
+    getCreativeTonies, clearChapters, requestUploadUrl, uploadToS3, setChapters;
 
 @(Command("list").Description("List all households and their Creative Tonies"))
-struct List {}
+struct List
+{
+}
 
 @(Command("clear").Description("Clear all chapters from a Creative Tonie"))
 struct Clear
@@ -80,29 +82,39 @@ private void fail(string msg)
 
 private Household resolveHousehold(Household[] households, string name)
 {
-    if (name is null) {
+    if (name is null)
+    {
         return households[0];
     }
 
-    foreach (h; households) {
-        if (h.name == name) {
+    foreach (h; households)
+    {
+        if (h.name == name)
+        {
             return h;
         }
     }
 
-    throw new Exception(format!"Household '%s' not found. Available: %-(%s, %)"(
-            name, households));
+    throw new Exception(format!"Household '%s' not found. Available: %-(%s, %)"(name, households));
 }
 
 private CreativeTonie resolveTonie(CreativeTonie[] tonies, string name)
 {
-    foreach (t; tonies) {
-        if (t.name == name) {
+    foreach (t; tonies)
+    {
+        if (t.name == name)
+        {
             return t;
         }
     }
-    throw new Exception(format!"Creative Tonie '%s' not found. Available: %-(%s, %)"(
-            name, tonies));
+    throw new Exception(format!"Creative Tonie '%s' not found. Available: %-(%s, %)"(name, tonies));
+}
+
+private string formatSeconds(long seconds)
+{
+    auto parts = TIME.transform(seconds * 1000).onlyRelevant.mostSignificant(2)
+        .map!(p => format!"%d%s"(p.value, p.name)).join(" ");
+    return parts.length > 0 ? parts : "0s";
 }
 
 private int runList(string token)
@@ -110,39 +122,34 @@ private int runList(string token)
     heading("Fetching households ...");
     auto households = getHouseholds(token);
 
-    auto table = new AsciiTable(5)
-        .header
-            .add("Household")
+    // dfmt off
+    auto table = new AsciiTable(6)
+        .header.add("Household")
             .add("Tonie")
             .add("ID")
             .add("Chapters")
-            .add("Duration");
+            .add("Duration")
+            .add("Remaining");
+    // dfmt on
 
     foreach (h; households)
     {
         auto tonies = getCreativeTonies(token, h.id);
         foreach (t; tonies)
         {
-            table.row
-                .add(h.name)
+            // dfmt off
+            table.row.add(h.name)
                 .add(t.name)
                 .add(t.id)
-                .add(t.chaptersPresent)
-                .add({
-                    auto parts = TIME.transform(cast(long)(t.secondsPresent * 1000))
-                                     .onlyRelevant
-                                     .mostSignificant(2)
-                                     .map!(p => format!"%d%s"(p.value, p.name))
-                                     .join(" ");
-                    return parts.length > 0 ? parts : "0s";
-                }());
+                .add(format("%s / %s", t.chaptersPresent, t.chaptersRemaining + t.chaptersPresent))
+                .add(format("%s / %s", formatSeconds(t.secondsPresent), formatSeconds(t.secondsRemaining + t.secondsPresent)))
+                .add(formatSeconds(t.secondsRemaining))
+            ;
+            // dfmt on
         }
     }
 
-    table.format
-        .columnSeparator(true)
-        .headerSeparator(true)
-        .writeln;
+    table.format.columnSeparator(true).headerSeparator(true).writeln;
 
     return 0;
 }
@@ -150,9 +157,9 @@ private int runList(string token)
 private int runClear(string token, Clear cmd)
 {
     auto households = getHouseholds(token);
-    auto household  = resolveHousehold(households, cmd.household);
-    auto tonies     = getCreativeTonies(token, household.id);
-    auto tonie      = resolveTonie(tonies, cmd.tonie);
+    auto household = resolveHousehold(households, cmd.household);
+    auto tonies = getCreativeTonies(token, household.id);
+    auto tonie = resolveTonie(tonies, cmd.tonie);
 
     heading(format!"Clearing all chapters from '%s' ..."(tonie.name));
     clearChapters(token, household.id, tonie.id);
@@ -169,9 +176,9 @@ private int runUpload(string token, Upload cmd)
     }
 
     auto households = getHouseholds(token);
-    auto household  = resolveHousehold(households, cmd.household);
-    auto tonies     = getCreativeTonies(token, household.id);
-    auto tonie      = resolveTonie(tonies, cmd.tonie);
+    auto household = resolveHousehold(households, cmd.household);
+    auto tonies = getCreativeTonies(token, household.id);
+    auto tonie = resolveTonie(tonies, cmd.tonie);
 
     heading(format!"Uploading %d file(s) in parallel ..."(cmd.files.length));
 
@@ -226,11 +233,8 @@ mixin CLI!Arguments.main!((arguments) {
         string token = authenticate(arguments.email, arguments.password);
         success("Authenticated.");
 
-        return arguments.cmd.matchCmd!(
-            (List _)       => runList(token),
-            (Clear cmd)    => runClear(token, cmd),
-            (Upload cmd)   => runUpload(token, cmd)
-        );
+        return arguments.cmd.matchCmd!((List _) => runList(token),
+            (Clear cmd) => runClear(token, cmd), (Upload cmd) => runUpload(token, cmd));
     }
     catch (Exception e)
     {
