@@ -3,7 +3,7 @@ description "CLI tool to manage Creative Tonies via the Tonie Cloud API"
 authors "Christian Köstlin"
 license "MIT"
 targetType "executable"
-targetPath "bin"
+targetPath "out/main/"
 
 dependency "argparse" version="~>2.0.2"
 dependency "requests" version="~>2.2.0"
