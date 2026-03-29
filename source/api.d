@@ -13,8 +13,7 @@ import std.uri : encodeComponent;
 private immutable string LOGIN_URL = "https://login.tonies.com/auth/realms/tonies/protocol/openid-connect/token";
 private immutable string API_BASE = "https://api.tonie.cloud/v2";
 private immutable string TONIE_URL = "https://my.tonies.com/creative-tonies/%s/%s";
-@serdeIgnoreUnexpectedKeys
-struct Chapter
+@serdeIgnoreUnexpectedKeys struct Chapter
 {
     string id;
     string title;
@@ -22,8 +21,7 @@ struct Chapter
     double seconds;
 }
 
-@serdeIgnoreUnexpectedKeys
-struct CreativeTonie
+@serdeIgnoreUnexpectedKeys struct CreativeTonie
 {
     string id;
     string householdId;
@@ -35,22 +33,19 @@ struct CreativeTonie
     Chapter[] chapters;
 }
 
-@serdeIgnoreUnexpectedKeys
-struct Household
+@serdeIgnoreUnexpectedKeys struct Household
 {
     string id;
     string name;
 }
 
-@serdeIgnoreUnexpectedKeys
-struct S3Fields
+@serdeIgnoreUnexpectedKeys struct S3Fields
 {
     string[string] fields;
     string url;
 }
 
-@serdeIgnoreUnexpectedKeys
-struct FileUploadRequest
+@serdeIgnoreUnexpectedKeys struct FileUploadRequest
 {
     string fileId;
     @serdeKeys("request")
@@ -64,8 +59,7 @@ struct NewChapter
     string fileId;
 }
 
-@serdeIgnoreUnexpectedKeys
-private struct AuthResponse
+@serdeIgnoreUnexpectedKeys private struct AuthResponse
 {
     string access_token;
 }
@@ -215,15 +209,14 @@ void setChapters(string token, string householdId, string tonieId, NewChapter[] 
         "Content-Type": "application/json"
     ]);
 
-    auto payload = ChapterPatch(
-        chapters.map!(c => ChapterEntry(c.title, c.fileId)).array
-    );
+    auto payload = ChapterPatch(chapters.map!(c => ChapterEntry(c.title, c.fileId)).array);
 
     auto resp = req.patch(API_BASE ~ "/households/" ~ householdId ~ "/creativetonies/" ~ tonieId,
             serializeJson(payload), "application/json");
     checkResponse(resp, "setChapters");
 }
 
-string urlFor(Household household, CreativeTonie tonie) {
+string urlFor(Household household, CreativeTonie tonie)
+{
     return format(TONIE_URL, household.id, tonie.id);
 }

@@ -6,9 +6,9 @@ import asciitable : AsciiTable;
 import colored : bold, cyan, darkGray, lightGreen, lightRed;
 import core.atomic : atomicLoad, atomicStore;
 import core.thread : msecs, Thread;
-import progressbar : multiTextUi, Progressbar;
+import progressbar : Progressbar, MultiProgressbarTextUI, textUi;
 import std.algorithm : map;
-import std.array : join;
+import std.array : array, join;
 import std.conv : to;
 import std.file : getSize;
 import std.parallelism : parallel;
@@ -66,17 +66,17 @@ private void heading(string msg)
 
 private void detail(string msg)
 {
-    writeln("    " ~ msg);
+    writeln("  " ~ msg);
 }
 
 private void success(string msg)
 {
-    writeln(("    ✓ " ~ msg).lightGreen.to!string);
+    writeln(("  ✓ " ~ msg).lightGreen.to!string);
 }
 
 private void fail(string msg)
 {
-    stderr.writeln(("    ✗ " ~ msg).lightRed.bold.to!string);
+    stderr.writeln(("  ✗ " ~ msg).lightRed.bold.to!string);
 }
 
 private Household resolveHousehold(Household[] households, string name)
@@ -111,8 +111,8 @@ private CreativeTonie resolveTonie(CreativeTonie[] tonies, string name)
 
 private string formatSeconds(double seconds)
 {
-    auto parts = TIME.transform(cast(long)(seconds * 1000)).onlyRelevant.mostSignificant(2)
-        .map!(p => format!"%d%s"(p.value, p.name)).join(" ");
+    auto parts = TIME.transform(cast(long)(seconds * 1000))
+        .onlyRelevant.mostSignificant(2).map!(p => format!("%d%s")(p.value, p.name)).join(" ");
     return parts.length > 0 ? parts : "0s";
 }
 
@@ -190,13 +190,14 @@ private int runUpload(string token, Upload cmd)
     foreach (i, file; cmd.files)
         pbs[i] = new Progressbar(getSize(file));
 
-    auto fmts = new string[cmd.files.length];
-    fmts[] = " %<120m [%=10P] %p";
+    auto pbFormat = "  %<120m [%=10P] %p";
 
-    auto mpb = multiTextUi(pbs, fmts);
+    auto mpb = new MultiProgressbarTextUI(pbs.map!(pb => textUi(pb, pbFormat)).array);
 
     foreach (i, file; cmd.files)
-        pbs[i].message(stripExtension(baseName(file)));
+    {
+        pbs[i].message(format!("idle - %s")(stripExtension(baseName(file))));
+    }
 
     shared bool stopRender = false;
     auto renderThread = new Thread({
@@ -212,11 +213,11 @@ private int runUpload(string token, Upload cmd)
     foreach (i, file; parallel(cmd.files))
     {
         string title = stripExtension(baseName(file));
-        pbs[i].message("url - " ~ title);
+        pbs[i].message(format!("url  - %s")(title));
         auto uploadReq = requestUploadUrl(token);
-        pbs[i].message("s3  - " ~ title);
+        pbs[i].message(format!("s3   - %s")(title));
         uploadToS3(uploadReq, file, (size_t n) { pbs[i].step(n); });
-        pbs[i].message(" ✓  - " ~ title);
+        pbs[i].message(format!("✓    - %s")(title));
         results[i] = NewChapter(title, uploadReq.fileId);
     }
 
@@ -226,7 +227,8 @@ private int runUpload(string token, Upload cmd)
 
     heading(format!"Setting %d chapter(s) on '%s' ..."(results.length, tonie.name));
     setChapters(token, household.id, tonie.id, results);
-    success(format!"%d chapter(s) committed to tonie. %s"(results.length, urlFor(household, tonie)));
+    success(format!"%d chapter(s) committed to tonie. %s"(results.length,
+            urlFor(household, tonie)));
     return 0;
 }
 
@@ -237,8 +239,13 @@ mixin CLI!Arguments.main!((arguments) {
         string token = authenticate(arguments.email, arguments.password);
         success("Authenticated.");
 
-        return arguments.cmd.matchCmd!((List _) => runList(token),
-            (Clear cmd) => runClear(token, cmd), (Upload cmd) => runUpload(token, cmd));
+        // dfmt off
+        return arguments.cmd.matchCmd!(
+            (List _) => runList(token),
+            (Clear cmd) => runClear(token, cmd),
+            (Upload cmd) => runUpload(token, cmd)
+        );
+        // dfmt on
     }
     catch (Exception e)
     {
