@@ -1,7 +1,7 @@
 module app;
 
 import argparse : Command, NamedArgument, PositionalArgument, SubCommand, CLI,
-    Description, Required, matchCmd;
+    Description, Required, matchCmd, EnvFallback;
 import asciitable : AsciiTable;
 import colored : bold, cyan, darkGray, lightGreen, lightRed;
 import core.atomic : atomicLoad, atomicStore;
@@ -50,10 +50,12 @@ struct Upload
 @(Command("donie").Description("Manage Creative Tonies via the Tonie Cloud API"))
 struct Arguments
 {
-    @(NamedArgument(["email", "e"]).Description("Tonie account email").Required)
+    @(NamedArgument(["email"]).Description("Tonie account email")
+            .Required.EnvFallback("TONIES_EMAIL"))
     string email;
 
-    @(NamedArgument(["password", "p"]).Description("Tonie account password").Required)
+    @(NamedArgument(["password"]).Description("Tonie account password")
+            .Required.EnvFallback("TONIES_PASSWORD"))
     string password;
 
     SubCommand!(List, Clear, Upload) cmd;
@@ -94,7 +96,8 @@ private Household resolveHousehold(Household[] households, string name)
         }
     }
 
-    throw new Exception(format!"Household '%s' not found. Available: %-(%s, %)"(name, households));
+    throw new Exception(format!("Household '%s' not found. Available: %-(%s, %)")(name,
+            households));
 }
 
 private CreativeTonie resolveTonie(CreativeTonie[] tonies, string name)
@@ -106,7 +109,8 @@ private CreativeTonie resolveTonie(CreativeTonie[] tonies, string name)
             return t;
         }
     }
-    throw new Exception(format!"Creative Tonie '%s' not found. Available: %-(%s, %)"(name, tonies));
+    throw new Exception(format!("Creative Tonie '%s' not found. Available: %-(%s, %)")(name,
+            tonies));
 }
 
 private string formatSeconds(double seconds)
@@ -165,7 +169,7 @@ private int runClear(string token, Clear cmd)
     auto tonies = getCreativeTonies(token, household.id);
     auto tonie = resolveTonie(tonies, cmd.tonie);
 
-    heading(format!"Clearing all chapters from '%s' ..."(tonie.name));
+    heading(format!("Clearing all chapters from '%s' ...")(tonie.name));
     clearChapters(token, household.id, tonie.id);
     success("All chapters cleared.");
     return 0;
@@ -184,7 +188,7 @@ private int runUpload(string token, Upload cmd)
     auto tonies = getCreativeTonies(token, household.id);
     auto tonie = resolveTonie(tonies, cmd.tonie);
 
-    heading(format!"Uploading %d file(s) in parallel ..."(cmd.files.length));
+    heading(format!("Uploading %d file(s) in parallel ...")(cmd.files.length));
 
     auto pbs = new Progressbar[cmd.files.length];
     foreach (i, file; cmd.files)
@@ -225,9 +229,9 @@ private int runUpload(string token, Upload cmd)
     renderThread.join();
     mpb.finish();
 
-    heading(format!"Setting %d chapter(s) on '%s' ..."(results.length, tonie.name));
+    heading(format!("Setting %d chapter(s) on '%s' ...")(results.length, tonie.name));
     setChapters(token, household.id, tonie.id, results);
-    success(format!"%d chapter(s) committed to tonie. %s"(results.length,
+    success(format!("%d chapter(s) committed to tonie. %s")(results.length,
             urlFor(household, tonie)));
     return 0;
 }
@@ -235,7 +239,7 @@ private int runUpload(string token, Upload cmd)
 mixin CLI!Arguments.main!((arguments) {
     try
     {
-        heading(format!"Authenticating as %s ..."(arguments.email));
+        heading(format!("Authenticating as %s ...")(arguments.email));
         string token = authenticate(arguments.email, arguments.password);
         success("Authenticated.");
 
