@@ -6,7 +6,7 @@ import asciitable : AsciiTable;
 import colored : bold, cyan, darkGray, lightGreen, lightRed;
 import core.atomic : atomicLoad, atomicStore;
 import core.thread : msecs, Thread;
-import progressbar : Progressbar, MultiProgressbarTextUI, textUi;
+import progressbar : graphicalTerminalUi, MultiLineProgressbarUI, Progressbar, textUi;
 import std.algorithm : map;
 import std.array : array, join;
 import std.conv : to;
@@ -191,12 +191,18 @@ private int runUpload(string token, Upload cmd)
     heading(format!("Uploading %d file(s) in parallel ...")(cmd.files.length));
 
     auto pbs = new Progressbar[cmd.files.length];
+    size_t totalBytes;
     foreach (i, file; cmd.files)
-        pbs[i] = new Progressbar(getSize(file));
+    {
+        auto fileSize = getSize(file);
+        pbs[i] = new Progressbar(fileSize);
+        totalBytes += fileSize;
+    }
 
     auto pbFormat = "  %<120m [%=10P] %p";
 
-    auto mpb = new MultiProgressbarTextUI(pbs.map!(pb => textUi(pb, pbFormat)).array);
+    auto mpb = new MultiLineProgressbarUI(pbs.map!(pb => textUi(pb, pbFormat)).array);
+    auto graphicalProgress = graphicalTerminalUi(new Progressbar(totalBytes));
 
     foreach (i, file; cmd.files)
     {
@@ -208,9 +214,13 @@ private int runUpload(string token, Upload cmd)
         while (!atomicLoad(stopRender))
         {
             mpb.render();
+            synchronized (graphicalProgress)
+                graphicalProgress.render();
             Thread.sleep(100.msecs);
         }
         mpb.render();
+        synchronized (graphicalProgress)
+            graphicalProgress.render();
     }).start();
 
     auto results = new NewChapter[cmd.files.length];
@@ -220,7 +230,11 @@ private int runUpload(string token, Upload cmd)
         pbs[i].message(format!("url  - %s")(title));
         auto uploadReq = requestUploadUrl(token);
         pbs[i].message(format!("s3   - %s")(title));
-        uploadToS3(uploadReq, file, (size_t n) { pbs[i].step(n); });
+        uploadToS3(uploadReq, file, (size_t n) {
+            pbs[i].step(n);
+            synchronized (graphicalProgress)
+                graphicalProgress.step(n);
+        });
         pbs[i].message(format!("✓    - %s")(title));
         results[i] = NewChapter(title, uploadReq.fileId);
     }
@@ -228,6 +242,7 @@ private int runUpload(string token, Upload cmd)
     atomicStore(stopRender, true);
     renderThread.join();
     mpb.finish();
+    graphicalProgress.finish();
 
     heading(format!("Setting %d chapter(s) on '%s' ...")(results.length, tonie.name));
     setChapters(token, household.id, tonie.id, results);

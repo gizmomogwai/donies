@@ -10,12 +10,12 @@
 		"mir-algorithm": "3.22.4",
 		"mir-core": "1.7.4",
 		"mir-cpuid": "1.2.11",
-		"mir-ion": {"path":"../../external/mir-ion"},
+		"mir-ion": "2.3.5",
 		"profiled": "0.0.2",
 		"progressbar": {"path":"../10-progressbar4d"},
-		"requests": "2.2.0",
+		"requests": "2.2.1",
 		"silly": "1.1.1",
 		"test_allocator": "0.3.4",
-		"unit-threaded": "2.2.3+commit.1.g1ebdbc9"
+		"unit-threaded": "2.2.4"
 	}
 }
