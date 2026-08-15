@@ -4,11 +4,11 @@ import argparse : Command, NamedArgument, PositionalArgument, SubCommand, CLI,
     Description, Required, matchCmd, EnvFallback;
 import asciitable : AsciiTable;
 import colored : bold, cyan, darkGray, lightGreen, lightRed;
-import core.atomic : atomicLoad, atomicStore;
-import core.thread : msecs, Thread;
+import core.thread : msecs;
 import progressbar : graphicalTerminalUi, MultiLineProgressbarUI, Progressbar, textUi;
 import std.algorithm : map;
 import std.array : array, join;
+import std.concurrency : Tid, receiveOnly, receiveTimeout, send, spawn, thisTid;
 import std.conv : to;
 import std.file : getSize;
 import std.parallelism : parallel;
@@ -64,6 +64,34 @@ struct Arguments
 private enum HIDE_CURSOR = "\033[?25l";
 private enum SHOW_CURSOR = "\033[?25h";
 
+private enum UploadStage
+{
+    idle,
+    requestUrl,
+    uploadS3,
+    done
+}
+
+private struct ProgressBytesUpdate
+{
+    size_t index;
+    size_t bytes;
+}
+
+private struct ProgressStageUpdate
+{
+    size_t index;
+    UploadStage stage;
+}
+
+private struct StopRendering
+{
+}
+
+private struct RenderingStopped
+{
+}
+
 private void heading(string msg)
 {
     writeln(("==> " ~ msg).cyan.bold.to!string);
@@ -88,6 +116,75 @@ private void setCursorVisible(bool visible)
 {
     stderr.write(visible ? SHOW_CURSOR : HIDE_CURSOR);
     stderr.flush();
+}
+
+private string uploadProgressMessage(UploadStage stage, string title)
+{
+    final switch (stage)
+    {
+    case UploadStage.idle:
+        return format!("idle - %s")(title);
+    case UploadStage.requestUrl:
+        return format!("url  - %s")(title);
+    case UploadStage.uploadS3:
+        return format!("s3   - %s")(title);
+    case UploadStage.done:
+        return format!("✓    - %s")(title);
+    }
+}
+
+private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
+        immutable(size_t)[] fileSizes, size_t totalBytes)
+{
+    auto pbs = new Progressbar[fileSizes.length];
+    foreach (i, fileSize; fileSizes)
+    {
+        pbs[i] = new Progressbar(fileSize);
+        pbs[i].message(uploadProgressMessage(UploadStage.idle, titles[i]));
+    }
+
+    auto pbFormat = "  %<120m [%=10P] %p";
+    auto mpb = new MultiLineProgressbarUI(pbs.map!(pb => textUi(pb, pbFormat)).array);
+    auto graphicalProgress = graphicalTerminalUi(new Progressbar(totalBytes));
+    auto completed = new bool[fileSizes.length];
+
+    size_t completedFiles;
+    size_t uploadedBytes;
+    bool stopRequested;
+
+    scope (exit)
+    {
+        mpb.finish();
+        graphicalProgress.finish();
+        ownerTid.send(RenderingStopped());
+    }
+
+    while (!stopRequested || completedFiles < fileSizes.length || uploadedBytes < totalBytes)
+    {
+        receiveTimeout(100.msecs,
+                (ProgressBytesUpdate msg) {
+            pbs[msg.index].step(msg.bytes);
+            graphicalProgress.step(msg.bytes);
+            uploadedBytes += msg.bytes;
+        },
+                (ProgressStageUpdate msg) {
+            pbs[msg.index].message(uploadProgressMessage(msg.stage, titles[msg.index]));
+            if (msg.stage == UploadStage.done && !completed[msg.index])
+            {
+                completed[msg.index] = true;
+                completedFiles++;
+            }
+        },
+                (StopRendering _) {
+            stopRequested = true;
+        });
+
+        mpb.render();
+        graphicalProgress.render();
+    }
+
+    mpb.render();
+    graphicalProgress.render();
 }
 
 private Household resolveHousehold(Household[] households, string name)
@@ -199,68 +296,44 @@ private int runUpload(string token, Upload cmd)
 
     heading(format!("Uploading %d file(s) in parallel ...")(cmd.files.length));
 
-    auto pbs = new Progressbar[cmd.files.length];
+    auto titles = new string[cmd.files.length];
+    auto fileSizes = new size_t[cmd.files.length];
     size_t totalBytes;
     foreach (i, file; cmd.files)
     {
         auto fileSize = getSize(file);
-        pbs[i] = new Progressbar(fileSize);
+        fileSizes[i] = fileSize;
+        titles[i] = stripExtension(baseName(file));
         totalBytes += fileSize;
-    }
-
-    auto pbFormat = "  %<120m [%=10P] %p";
-
-    auto mpb = new MultiLineProgressbarUI(pbs.map!(pb => textUi(pb, pbFormat)).array);
-    auto graphicalProgress = graphicalTerminalUi(new Progressbar(totalBytes));
-
-    foreach (i, file; cmd.files)
-    {
-        pbs[i].message(format!("idle - %s")(stripExtension(baseName(file))));
     }
 
     auto results = new NewChapter[cmd.files.length];
     {
-        shared bool stopRender = false;
-        bool renderStarted = false;
-        auto renderThread = new Thread({
-            while (!atomicLoad(stopRender))
-            {
-                mpb.render();
-                synchronized (graphicalProgress)
-                    graphicalProgress.render();
-                Thread.sleep(100.msecs);
-            }
-            mpb.render();
-            synchronized (graphicalProgress)
-                graphicalProgress.render();
-        });
+        auto renderTitles = cast(immutable) titles.map!(title => cast(immutable) title.dup).array;
+        auto renderFileSizes = cast(immutable) fileSizes.dup;
+        auto renderThread = spawn(&renderUploadProgress, thisTid, renderTitles, renderFileSizes,
+                totalBytes);
 
         setCursorVisible(false);
         scope (exit)
         {
-            atomicStore(stopRender, true);
-            if (renderStarted)
-                renderThread.join();
-            mpb.finish();
-            graphicalProgress.finish();
+            renderThread.send(StopRendering());
+            receiveOnly!RenderingStopped();
             setCursorVisible(true);
         }
-        renderThread.start();
-        renderStarted = true;
 
         foreach (i, file; parallel(cmd.files))
         {
-            string title = stripExtension(baseName(file));
-            pbs[i].message(format!("url  - %s")(title));
+            auto index = cast(size_t) i;
+            auto title = titles[index];
+            renderThread.send(ProgressStageUpdate(index, UploadStage.requestUrl));
             auto uploadReq = requestUploadUrl(token);
-            pbs[i].message(format!("s3   - %s")(title));
+            renderThread.send(ProgressStageUpdate(index, UploadStage.uploadS3));
             uploadToS3(uploadReq, file, (size_t n) {
-                pbs[i].step(n);
-                synchronized (graphicalProgress)
-                    graphicalProgress.step(n);
+                renderThread.send(ProgressBytesUpdate(index, n));
             });
-            pbs[i].message(format!("✓    - %s")(title));
-            results[i] = NewChapter(title, uploadReq.fileId);
+            renderThread.send(ProgressStageUpdate(index, UploadStage.done));
+            results[index] = NewChapter(title, uploadReq.fileId);
         }
     }
 
