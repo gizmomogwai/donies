@@ -61,6 +61,9 @@ struct Arguments
     SubCommand!(List, Clear, Upload) cmd;
 }
 
+private enum HIDE_CURSOR = "\033[?25l";
+private enum SHOW_CURSOR = "\033[?25h";
+
 private void heading(string msg)
 {
     writeln(("==> " ~ msg).cyan.bold.to!string);
@@ -79,6 +82,12 @@ private void success(string msg)
 private void fail(string msg)
 {
     stderr.writeln(("  ✗ " ~ msg).lightRed.bold.to!string);
+}
+
+private void setCursorVisible(bool visible)
+{
+    stderr.write(visible ? SHOW_CURSOR : HIDE_CURSOR);
+    stderr.flush();
 }
 
 private Household resolveHousehold(Household[] households, string name)
@@ -209,40 +218,51 @@ private int runUpload(string token, Upload cmd)
         pbs[i].message(format!("idle - %s")(stripExtension(baseName(file))));
     }
 
-    shared bool stopRender = false;
-    auto renderThread = new Thread({
-        while (!atomicLoad(stopRender))
-        {
+    auto results = new NewChapter[cmd.files.length];
+    {
+        shared bool stopRender = false;
+        bool renderStarted = false;
+        auto renderThread = new Thread({
+            while (!atomicLoad(stopRender))
+            {
+                mpb.render();
+                synchronized (graphicalProgress)
+                    graphicalProgress.render();
+                Thread.sleep(100.msecs);
+            }
             mpb.render();
             synchronized (graphicalProgress)
                 graphicalProgress.render();
-            Thread.sleep(100.msecs);
-        }
-        mpb.render();
-        synchronized (graphicalProgress)
-            graphicalProgress.render();
-    }).start();
-
-    auto results = new NewChapter[cmd.files.length];
-    foreach (i, file; parallel(cmd.files))
-    {
-        string title = stripExtension(baseName(file));
-        pbs[i].message(format!("url  - %s")(title));
-        auto uploadReq = requestUploadUrl(token);
-        pbs[i].message(format!("s3   - %s")(title));
-        uploadToS3(uploadReq, file, (size_t n) {
-            pbs[i].step(n);
-            synchronized (graphicalProgress)
-                graphicalProgress.step(n);
         });
-        pbs[i].message(format!("✓    - %s")(title));
-        results[i] = NewChapter(title, uploadReq.fileId);
-    }
 
-    atomicStore(stopRender, true);
-    renderThread.join();
-    mpb.finish();
-    graphicalProgress.finish();
+        setCursorVisible(false);
+        scope (exit)
+        {
+            atomicStore(stopRender, true);
+            if (renderStarted)
+                renderThread.join();
+            mpb.finish();
+            graphicalProgress.finish();
+            setCursorVisible(true);
+        }
+        renderThread.start();
+        renderStarted = true;
+
+        foreach (i, file; parallel(cmd.files))
+        {
+            string title = stripExtension(baseName(file));
+            pbs[i].message(format!("url  - %s")(title));
+            auto uploadReq = requestUploadUrl(token);
+            pbs[i].message(format!("s3   - %s")(title));
+            uploadToS3(uploadReq, file, (size_t n) {
+                pbs[i].step(n);
+                synchronized (graphicalProgress)
+                    graphicalProgress.step(n);
+            });
+            pbs[i].message(format!("✓    - %s")(title));
+            results[i] = NewChapter(title, uploadReq.fileId);
+        }
+    }
 
     heading(format!("Setting %d chapter(s) on '%s' ...")(results.length, tonie.name));
     setChapters(token, household.id, tonie.id, results);
