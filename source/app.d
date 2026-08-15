@@ -5,7 +5,7 @@ import argparse : Command, NamedArgument, PositionalArgument, SubCommand, CLI,
 import asciitable : AsciiTable;
 import colored : bold, cyan, darkGray, lightGreen, lightRed;
 import core.thread : msecs;
-import progressbar : graphicalTerminalUi, MultiLineProgressbarUI, Progressbar, textUi;
+import progressbar : compositeUi, graphicalTerminalUi, MultiLineProgressbarUI, Progressbar, textUi;
 import std.algorithm : map;
 import std.array : array, join;
 import std.concurrency : Tid, receiveOnly, receiveTimeout, send, spawn, thisTid;
@@ -144,8 +144,9 @@ private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
     }
 
     auto pbFormat = "  %<120m [%=10P] %p";
-    auto mpb = new MultiLineProgressbarUI(pbs.map!(pb => textUi(pb, pbFormat)).array);
-    auto graphicalProgress = graphicalTerminalUi(new Progressbar(totalBytes));
+    auto totalProgressbar = new Progressbar(totalBytes);
+    auto ui = compositeUi(new MultiLineProgressbarUI(pbs.map!(pb => textUi(pb, pbFormat)).array),
+            graphicalTerminalUi(totalProgressbar));
     auto completed = new bool[fileSizes.length];
 
     size_t completedFiles;
@@ -154,8 +155,7 @@ private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
 
     scope (exit)
     {
-        mpb.finish();
-        graphicalProgress.finish();
+        ui.finish();
         ownerTid.send(RenderingStopped());
     }
 
@@ -164,7 +164,7 @@ private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
         receiveTimeout(100.msecs,
                 (ProgressBytesUpdate msg) {
             pbs[msg.index].step(msg.bytes);
-            graphicalProgress.step(msg.bytes);
+            totalProgressbar.step(msg.bytes);
             uploadedBytes += msg.bytes;
         },
                 (ProgressStageUpdate msg) {
@@ -179,12 +179,10 @@ private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
             stopRequested = true;
         });
 
-        mpb.render();
-        graphicalProgress.render();
+        ui.render();
     }
 
-    mpb.render();
-    graphicalProgress.render();
+    ui.render();
 }
 
 private Household resolveHousehold(Household[] households, string name)
