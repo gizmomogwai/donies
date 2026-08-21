@@ -5,7 +5,8 @@ import argparse : Command, NamedArgument, PositionalArgument, SubCommand, CLI,
 import asciitable : AsciiTable;
 import colored : bold, cyan, darkGray, lightGreen, lightRed;
 import core.thread : msecs;
-import progressbar : compositeUi, graphicalTerminalUi, MultiLineProgressbarUI, Progressbar, textUi;
+import progressbar : compositeUi, graphicalTerminalUi,
+    MultiLineProgressbarUI, Progressbar, textUi;
 import std.algorithm : map;
 import std.array : array, join;
 import std.concurrency : Tid, receiveOnly, receiveTimeout, send, spawn, thisTid;
@@ -145,8 +146,8 @@ private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
 
     auto pbFormat = "  %<120m [%=10P] %p";
     auto totalProgressbar = new Progressbar(totalBytes);
-    auto ui = compositeUi(new MultiLineProgressbarUI(pbs.map!(pb => textUi(pb, pbFormat)).array),
-            graphicalTerminalUi(totalProgressbar));
+    auto ui = compositeUi(new MultiLineProgressbarUI(pbs.map!(pb => textUi(pb,
+            pbFormat)).array), graphicalTerminalUi(totalProgressbar));
     auto completed = new bool[fileSizes.length];
 
     size_t completedFiles;
@@ -161,24 +162,29 @@ private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
 
     while (!stopRequested || completedFiles < fileSizes.length || uploadedBytes < totalBytes)
     {
+        // dfmt off
         receiveTimeout(100.msecs,
-                (ProgressBytesUpdate msg) {
-            pbs[msg.index].step(msg.bytes);
-            totalProgressbar.step(msg.bytes);
-            uploadedBytes += msg.bytes;
-        },
-                (ProgressStageUpdate msg) {
-            pbs[msg.index].message(uploadProgressMessage(msg.stage, titles[msg.index]));
-            if (msg.stage == UploadStage.done && !completed[msg.index])
+            (ProgressBytesUpdate msg)
             {
-                completed[msg.index] = true;
-                completedFiles++;
-            }
-        },
-                (StopRendering _) {
-            stopRequested = true;
-        });
-
+                pbs[msg.index].step(msg.bytes);
+                totalProgressbar.step(msg.bytes);
+                uploadedBytes += msg.bytes;
+            },
+            (ProgressStageUpdate msg)
+            {
+                pbs[msg.index].message(uploadProgressMessage(msg.stage, titles[msg.index]));
+                if (msg.stage == UploadStage.done && !completed[msg.index])
+                {
+                    completed[msg.index] = true;
+                    completedFiles++;
+                }
+            },
+            (StopRendering _)
+            {
+                stopRequested = true;
+            },
+        );
+        // dfmt on
         ui.render();
     }
 
@@ -309,8 +315,8 @@ private int runUpload(string token, Upload cmd)
     {
         auto renderTitles = cast(immutable) titles.map!(title => cast(immutable) title.dup).array;
         auto renderFileSizes = cast(immutable) fileSizes.dup;
-        auto renderThread = spawn(&renderUploadProgress, thisTid, renderTitles, renderFileSizes,
-                totalBytes);
+        auto renderThread = spawn(&renderUploadProgress, thisTid,
+                renderTitles, renderFileSizes, totalBytes);
 
         setCursorVisible(false);
         scope (exit)
