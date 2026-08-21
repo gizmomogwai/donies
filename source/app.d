@@ -16,6 +16,7 @@ import std.parallelism : parallel;
 import std.path : baseName, stripExtension;
 import std.stdio : stderr, writefln, writeln;
 import std.string : format;
+import std.sumtype : SumType;
 import unit : mostSignificant, onlyRelevant, TIME;
 import api : Household, CreativeTonie, NewChapter, authenticate, getHouseholds,
     getCreativeTonies, clearChapters, requestUploadUrl, uploadToS3, setChapters, urlFor;
@@ -65,24 +66,29 @@ struct Arguments
 private enum HIDE_CURSOR = "\033[?25l";
 private enum SHOW_CURSOR = "\033[?25h";
 
-private enum UploadStage
+private struct Idle
 {
-    idle,
-    requestUrl,
-    uploadS3,
-    done
 }
 
-private struct ProgressBytesUpdate
+private struct RequestUploadURL
 {
-    size_t index;
+}
+
+private struct UploadToS3
+{
     size_t bytes;
 }
 
-private struct ProgressStageUpdate
+private struct Done
+{
+}
+
+private alias Phase = SumType!(Idle, RequestUploadURL, UploadToS3, Done);
+
+private struct ProgressInformation
 {
     size_t index;
-    UploadStage stage;
+    Phase phase;
 }
 
 private struct StopRendering
@@ -119,19 +125,14 @@ private void setCursorVisible(bool visible)
     stderr.flush();
 }
 
-private string uploadProgressMessage(UploadStage stage, string title)
+private string uploadProgressMessage(Phase phase, string title)
 {
-    final switch (stage)
-    {
-    case UploadStage.idle:
-        return format!("idle - %s")(title);
-    case UploadStage.requestUrl:
-        return format!("url  - %s")(title);
-    case UploadStage.uploadS3:
-        return format!("s3   - %s")(title);
-    case UploadStage.done:
-        return format!("✓    - %s")(title);
-    }
+    return phase.match!(
+        (Idle _) => format!("idle - %s")(title),
+        (RequestUploadURL _) => format!("url  - %s")(title),
+        (UploadToS3 _) => format!("s3   - %s")(title),
+        (Done _) => format!("✓    - %s")(title),
+    );
 }
 
 private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
@@ -141,7 +142,7 @@ private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
     foreach (i, fileSize; fileSizes)
     {
         pbs[i] = new Progressbar(fileSize);
-        pbs[i].message(uploadProgressMessage(UploadStage.idle, titles[i]));
+        pbs[i].message(uploadProgressMessage(Phase(Idle()), titles[i]));
     }
 
     auto pbFormat = "  %<120m [%=10P] %p";
@@ -164,20 +165,35 @@ private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
     {
         // dfmt off
         receiveTimeout(100.msecs,
-            (ProgressBytesUpdate msg)
+            (ProgressInformation info)
             {
-                pbs[msg.index].step(msg.bytes);
-                totalProgressbar.step(msg.bytes);
-                uploadedBytes += msg.bytes;
-            },
-            (ProgressStageUpdate msg)
-            {
-                pbs[msg.index].message(uploadProgressMessage(msg.stage, titles[msg.index]));
-                if (msg.stage == UploadStage.done && !completed[msg.index])
-                {
-                    completed[msg.index] = true;
-                    completedFiles++;
-                }
+                auto index = info.index;
+                pbs[index].message(uploadProgressMessage(info.phase, titles[index]));
+                info.phase.match!(
+                    (Idle msg)
+                    {
+                    },
+                    (RequestUploadURL msg)
+                    {
+                    },
+                    (UploadToS3 msg)
+                    {
+                        if (msg.bytes > 0)
+                        {
+                            pbs[index].step(msg.bytes);
+                            totalProgressbar.step(msg.bytes);
+                            uploadedBytes += msg.bytes;
+                        }
+                    },
+                    (Done msg)
+                    {
+                        if (!completed[index])
+                        {
+                            completed[index] = true;
+                            completedFiles++;
+                        }
+                    },
+                );
             },
             (StopRendering _)
             {
@@ -330,13 +346,13 @@ private int runUpload(string token, Upload cmd)
         {
             auto index = cast(size_t) i;
             auto title = titles[index];
-            renderThread.send(ProgressStageUpdate(index, UploadStage.requestUrl));
+            renderThread.send(ProgressInformation(index, Phase(RequestUploadURL())));
             auto uploadReq = requestUploadUrl(token);
-            renderThread.send(ProgressStageUpdate(index, UploadStage.uploadS3));
+            renderThread.send(ProgressInformation(index, Phase(UploadToS3(bytes: 0))));
             uploadToS3(uploadReq, file, (size_t n) {
-                renderThread.send(ProgressBytesUpdate(index, n));
+                renderThread.send(ProgressInformation(index, Phase(UploadToS3(bytes: n))));
             });
-            renderThread.send(ProgressStageUpdate(index, UploadStage.done));
+            renderThread.send(ProgressInformation(index, Phase(Done())));
             results[index] = NewChapter(title, uploadReq.fileId);
         }
     }
