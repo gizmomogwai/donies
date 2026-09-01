@@ -10,7 +10,7 @@ import progressbar : compositeUi, graphicalTerminalUi,
 import std.algorithm : map;
 import std.array : array, join;
 import std.concurrency : Tid, receiveOnly, receiveTimeout, send, spawn, thisTid;
-import std.conv : to;
+import std.conv : text, to;
 import std.file : getSize;
 import std.parallelism : parallel;
 import std.path : baseName, stripExtension;
@@ -101,22 +101,22 @@ private struct RenderingStopped
 
 private void heading(string msg)
 {
-    writeln(("==> " ~ msg).cyan.bold.to!string);
+    writeln(i"==> $(msg)".text.cyan.bold.to!string);
 }
 
 private void detail(string msg)
 {
-    writeln("  " ~ msg);
+    writeln(i"  $(msg)".text);
 }
 
 private void success(string msg)
 {
-    writeln(("  ✓ " ~ msg).lightGreen.to!string);
+    writeln(i"  ✓ $(msg)".text.lightGreen.to!string);
 }
 
 private void fail(string msg)
 {
-    stderr.writeln(("  ✗ " ~ msg).lightRed.bold.to!string);
+    stderr.writeln(i"  ✗ $(msg)".text.lightRed.bold.to!string);
 }
 
 private void setCursorVisible(bool visible)
@@ -129,10 +129,10 @@ private string uploadProgressMessage(Phase phase, string title)
 {
     // dfmt off
     return phase.match!(
-        (Idle _) => format!("idle - %s")(title),
-        (RequestUploadURL _) => format!("url  - %s")(title),
-        (UploadToS3 _) => format!("s3   - %s")(title),
-        (Done _) => format!("✓    - %s")(title),
+        (Idle _) => i"idle - $(title)".text,
+        (RequestUploadURL _) => i"url  - $(title)".text,
+        (UploadToS3 _) => i"s3   - $(title)".text,
+        (Done _) => i"✓    - $(title)".text,
     );
     // dfmt on
 }
@@ -224,8 +224,7 @@ private Household resolveHousehold(Household[] households, string name)
         }
     }
 
-    throw new Exception(format!("Household '%s' not found. Available: %-(%s, %)")(name,
-            households));
+    throw new Exception(i"Household '$(name)' not found. Available: $(households.map!("a.to!string").join(", "))".text);
 }
 
 private CreativeTonie resolveTonie(CreativeTonie[] tonies, string name)
@@ -369,7 +368,7 @@ private int runUpload(string token, Upload cmd)
 mixin CLI!Arguments.main!((arguments) {
     try
     {
-        heading(format!("Authenticating as %s ...")(arguments.email));
+        heading(i"Authenticating as $(arguments.email) ...".text);
         string token = authenticate(arguments.email, arguments.password);
         success("Authenticated.");
 
