@@ -16,7 +16,7 @@ import std.parallelism : parallel;
 import std.path : baseName, stripExtension;
 import std.stdio : stderr, writefln, writeln;
 import std.string : format;
-import std.sumtype : SumType;
+import std.sumtype : match, SumType;
 import unit : mostSignificant, onlyRelevant, TIME;
 import api : Household, CreativeTonie, NewChapter, authenticate, getHouseholds,
     getCreativeTonies, clearChapters, requestUploadUrl, uploadToS3, setChapters, urlFor;
@@ -127,12 +127,14 @@ private void setCursorVisible(bool visible)
 
 private string uploadProgressMessage(Phase phase, string title)
 {
+    // dfmt off
     return phase.match!(
         (Idle _) => format!("idle - %s")(title),
         (RequestUploadURL _) => format!("url  - %s")(title),
         (UploadToS3 _) => format!("s3   - %s")(title),
         (Done _) => format!("✓    - %s")(title),
     );
+    // dfmt on
 }
 
 private void renderUploadProgress(Tid ownerTid, immutable(string)[] titles,
