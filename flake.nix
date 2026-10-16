@@ -5,36 +5,26 @@
   outputs = {
     self,
     nixpkgs,
-  }: let
-    forAllSystems = nixpkgs.lib.genAttrs [
-      "x86_64-linux"
-      "aarch64-linux"
-    ];
-  in {
-    packages = forAllSystems (
-      system: let
-        pkgs = nixpkgs.legacyPackages.${system};
-      in {
+  }:
+    let
+      systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+      forAll = f: nixpkgs.lib.genAttrs systems (s: f nixpkgs.legacyPackages.${s});
+    in {
+      packages = forAll (pkgs: {
         default = pkgs.buildDubPackage {
           pname = "donie";
           version = self.shortRev or "dirty";
           src = ./.;
           dubLock = ./dub-lock.json;
-          nativeBuildInputs = [pkgs.makeWrapper];
           installPhase = ''
-            runHook preInstall
-            install -Dm755 out/main/donie -t $out/bin
-            wrapProgram $out/bin/donie --prefix LD_LIBRARY_PATH : ${pkgs.openssl.out}/lib
-            runHook postInstall
-          '';
-        };
-      }
-    );
-
-    devShells = forAllSystems (
-      system: let
-        pkgs = nixpkgs.legacyPackages.${system};
-      in {
+           runHook preInstall
+                                     install -Dm755 out/main/donie -t $out/bin
+                        runHook postInstall
+                        '';
+          };
+        }
+      );
+      devShells = forAll (pkgs: {
         default = pkgs.mkShell {
           # ldc/dub from the same nixpkgs as openssl, so the glibc versions match
           packages = [
@@ -49,5 +39,5 @@
         };
       }
     );
-  };
+    };
 }
