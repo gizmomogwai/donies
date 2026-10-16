@@ -6,16 +6,16 @@
 		"automem": "0.6.11",
 		"cachetools": "0.4.2",
 		"colored": "0.0.34",
-		"dime": "0.0.9+commit.2.g018f35a",
+		"dime": "0.0.10",
 		"mir-algorithm": "3.22.4",
 		"mir-core": "1.7.4",
 		"mir-cpuid": "1.2.11",
 		"mir-ion": "2.3.5",
 		"profiled": "0.0.2",
-		"progressbar": {"path":"../10-progressbar4d"},
+		"progressbar": "0.0.4",
 		"requests": "2.2.1",
 		"silly": "1.1.1",
 		"test_allocator": "0.3.4",
-		"unit-threaded": "2.2.4"
+		"unit-threaded": "2.2.6"
 	}
 }
