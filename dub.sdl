@@ -6,7 +6,7 @@ targetType "executable"
 targetPath "out/main/"
 
 dependency "argparse" version="~>2.0.2"
-dependency "requests" version="~>2.2.0"
+dependency "requests" repository="git+https://github.com/gizmomogwai/dlang-requests.git" version="750643e5651956b1bdcfbe5ff287c7f3964f1f59"
 dependency "colored" version="~>0.0.33"
 dependency "progressbar" version="~>0.0.4"
 dependency "asciitable" version="~>0.0.17"

@@ -13,7 +13,7 @@
 		"mir-ion": "2.3.5",
 		"profiled": "0.0.2",
 		"progressbar": "0.0.4",
-		"requests": "2.2.1",
+		"requests": {"version":"750643e5651956b1bdcfbe5ff287c7f3964f1f59","repository":"git+https://github.com/gizmomogwai/dlang-requests.git"},
 		"silly": "1.1.1",
 		"test_allocator": "0.3.4",
 		"unit-threaded": "2.2.6"

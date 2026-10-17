@@ -12,7 +12,7 @@ import std.array : array, join;
 import std.concurrency : Tid, receiveOnly, receiveTimeout, send, spawn, thisTid;
 import std.conv : text, to;
 import std.file : getSize;
-import std.parallelism : parallel;
+import std.parallelism : TaskPool;
 import std.path : baseName, stripExtension;
 import std.stdio : stderr, writefln, writeln;
 import std.string : format;
@@ -44,6 +44,9 @@ struct Upload
 
     @(NamedArgument("household").Description("Name of the household (default: first household)"))
     string household;
+
+    @(NamedArgument("no-progress").Description("Print plain log lines instead of progress bars"))
+    bool noProgress;
 
     @(PositionalArgument(0).Description("Audio files to upload"))
     string[] files;
@@ -330,30 +333,56 @@ private int runUpload(string token, Upload cmd)
 
     auto results = new NewChapter[cmd.files.length];
     {
-        auto renderTitles = cast(immutable) titles.map!(title => cast(immutable) title.dup).array;
-        auto renderFileSizes = cast(immutable) fileSizes.dup;
-        auto renderThread = spawn(&renderUploadProgress, thisTid,
-                renderTitles, renderFileSizes, totalBytes);
-
-        setCursorVisible(false);
-        scope (exit)
+        Tid renderThread;
+        void delegate(size_t, Phase) report;
+        if (cmd.noProgress)
         {
-            renderThread.send(StopRendering());
-            receiveOnly!RenderingStopped();
-            setCursorVisible(true);
+            report = (size_t index, Phase phase) {
+                // skip per-chunk byte updates, log only phase changes
+                if (phase.match!((UploadToS3 p) => p.bytes == 0, _ => true))
+                {
+                    detail(uploadProgressMessage(phase, titles[index]));
+                }
+            };
+        }
+        else
+        {
+            auto renderTitles = cast(immutable) titles.map!(title => cast(immutable) title.dup)
+                .array;
+            auto renderFileSizes = cast(immutable) fileSizes.dup;
+            renderThread = spawn(&renderUploadProgress, thisTid, renderTitles,
+                    renderFileSizes, totalBytes);
+            setCursorVisible(false);
+            report = (size_t index, Phase phase) {
+                renderThread.send(ProgressInformation(index, phase));
+            };
         }
 
-        foreach (i, file; parallel(cmd.files))
+        scope (exit)
+        {
+            if (!cmd.noProgress)
+            {
+                renderThread.send(StopRendering());
+                receiveOnly!RenderingStopped();
+                setCursorVisible(true);
+            }
+        }
+
+        // too many concurrent TLS handshakes get reset by S3 (ECONNRESET)
+        auto pool = new TaskPool(4);
+        scope (exit)
+            pool.finish(true);
+        foreach (i, file; pool.parallel(cmd.files, 1))
         {
             auto index = cast(size_t) i;
             auto title = titles[index];
-            renderThread.send(ProgressInformation(index, Phase(RequestUploadURL())));
+            report(index, Phase(RequestUploadURL()));
             auto uploadReq = requestUploadUrl(token);
-            renderThread.send(ProgressInformation(index, Phase(UploadToS3(bytes: 0))));
+            report(index, Phase(UploadToS3(bytes: 0)));
             uploadToS3(uploadReq, file, (size_t n) {
-                renderThread.send(ProgressInformation(index, Phase(UploadToS3(bytes: n))));
+                report(index, Phase(UploadToS3(bytes: n)));
             });
-            renderThread.send(ProgressInformation(index, Phase(Done())));
+            report(index, Phase(Done()));
             results[index] = NewChapter(title, uploadReq.fileId);
         }
     }
@@ -366,23 +395,15 @@ private int runUpload(string token, Upload cmd)
 }
 
 mixin CLI!Arguments.main!((arguments) {
-    try
-    {
-        heading(i"Authenticating as $(arguments.email) ...".text);
-        string token = authenticate(arguments.email, arguments.password);
-        success("Authenticated.");
+    heading(i"Authenticating as $(arguments.email) ...".text);
+    string token = authenticate(arguments.email, arguments.password);
+    success("Authenticated.");
 
-        // dfmt off
-        return arguments.cmd.matchCmd!(
-            (List _) => runList(token),
-            (Clear cmd) => runClear(token, cmd),
-            (Upload cmd) => runUpload(token, cmd)
-        );
-        // dfmt on
-    }
-    catch (Exception e)
-    {
-        fail(e.msg);
-        return 1;
-    }
+    // dfmt off
+    return arguments.cmd.matchCmd!(
+        (List _) => runList(token),
+        (Clear cmd) => runClear(token, cmd),
+        (Upload cmd) => runUpload(token, cmd)
+    );
+    // dfmt on
 });

@@ -188,6 +188,13 @@ void uploadToS3(FileUploadRequest fur, string filePath, void delegate(size_t) on
 
     auto resp = req.post(fur.s3.url, form);
 
+    // requests swallows NetworkException during multipart send and returns code 0
+    if (resp.code == 0)
+    {
+        throw new Exception(format!"S3 upload of '%s' failed: connection error while sending (no HTTP response)"(
+                filePath));
+    }
+
     // S3 returns 204 No Content on success
     if (resp.code != 204 && resp.code != 200)
     {
