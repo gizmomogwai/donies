@@ -15,7 +15,22 @@
           pname = "donie";
           version = self.shortRev or "dirty";
           src = ./.;
-          dubLock = ./dub-lock.json;
+          # requests is a git dependency; dub would call git in the sandbox, so use a path dependency instead
+          dubLock = let
+            lock = pkgs.lib.importJSON ./dub-lock.json;
+          in
+            lock // {dependencies = builtins.removeAttrs lock.dependencies ["requests"];};
+          requests = pkgs.fetchFromGitHub {
+            owner = "gizmomogwai";
+            repo = "dlang-requests";
+            rev = "750643e5651956b1bdcfbe5ff287c7f3964f1f59";
+            hash = "sha256-R+OEhXeUF6inxkfBAxvDzNDKfqocCu85frLfz1yF5Z4=";
+          };
+          postPatch = ''
+            cp -r --no-preserve=mode $requests ../requests
+            sed -i 's|^dependency "requests" .*|dependency "requests" path="../requests"|' dub.sdl
+            sed -i 's|"requests": {.*}|"requests": {"path": "../requests"}|' dub.selections.json
+          '';
           installPhase = ''
            runHook preInstall
                                      install -Dm755 out/main/donie -t $out/bin
